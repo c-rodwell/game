@@ -1,4 +1,5 @@
 import random
+import math
 
 class Game: #rules of the game
         #players
@@ -261,7 +262,7 @@ class FingerGame(Game): #for now assume 2 players
     def __init__(self, params):
         super().__init__(params)
         self.handsperplayer = params['hands per player'] if 'hands per player' in params else 2
-        self.outnumber = parmas['out number'] of 'out number' in params else 6
+        self.outnumber = parmas['out number'] if 'out number' in params else 6
     def allowed_moves(self, state, playernum): #public - if you're not allowed to see opponents allowed moves, pass an incomplete state
         #could pass this info to player or just to check legal moves
         #(does it need player arg, since state should include which player to move?)
@@ -270,11 +271,13 @@ class FingerGame(Game): #for now assume 2 players
                 if otherplayer != playernum ]#and myhand is not zero and opponents 
         valid_splits = ['split '+str(handnum) for handnum in range(1, self.handsperplayer+1) ] #if that hand is even and there is an open space
     def move(self, state, player, move): #public
+        return
         #hit - add the number from your hand to opponents hand
         #split - put half your hand into your open hand
         #now it is the next player's turn
 
     def outcome(self, state):
+        return
         #if all but one player has all 0: that player gets +1, others get -1
         #make a tie for looped games?
         #else None
@@ -292,6 +295,147 @@ class MinMaxFingerGamePlayer(MinMaxSearchPlayer):
         return (state.current_player_num, tuple(state.board[0]), tuple(state.board[1]), tuple(state.board[2])) #tuple can be a key, but not list
     def heuristic(self, game, state):
         return 0 #that is the default
+
+#mancala game
+
+#board structure:
+#+---+---+---+---+---+---+---+---+
+#|   | 1 | 2 | 3 | 4 | 5 | 6 |   |
+#| 0 |---+---+---+---+---+---| 0 |
+#|   | 6 | 5 | 4 | 3 | 2 | 1 |   |
+#+---+---+---+---+---+---+---+---+
+#
+#represent as [row1,row2] where each row has index 0-6, 0 is the store
+
+class mancalaState(Gamestate):
+    def __init__(self, board, current_player_num):
+        self.board=board #board is a 2d array of integers
+        self.current_player_num = current_player_num
+    def copy(self):
+        copied_board = gridofvaluescopy(self.board)
+        return mancalaState(copied_board, self.current_player_num)
+
+class mancalaGame(Game): #for now assume 2 players
+    def __init__(self, params):
+        super().__init__(params) #default params - starting state, players
+
+    #moves - number from 1 to 6 indicating which of your piles you pick up - only from own side and not the store
+    def allowed_moves(self, state, playernum): #public - if you're not allowed to see opponents allowed moves, pass an incomplete state. does it need playernum arg?
+        return [n for n in range(1,7) if state.board[playernum-1][n] > 0] 
+      
+    def move(self, state, player, move): #move is an integer 1-6
+        if move in self.allowed_moves(state, player):
+            newstate = state.copy()
+            numstones = state.board[player-1][move]
+            currentside = player
+            currentindex = move
+            newstate.board[player-1][move] = 0 #pick up all the stones there. should there be a setter method?
+            nextplayer = self.otherplayer(player) #player who will go next - usually that is the other player
+            while numstones > 0:
+                currentside, currentindex = self.nextspace(currentside, currentindex, player) #go to next spot, drop 1 stone there
+                newstate.board[currentside-1][currentindex] += 1
+                numstones -=1
+            #special rules for where the last stone drops
+            if currentindex == 0: #landed in your own store - go again
+                nextplayer = player
+            elif currentside == player and newstate.board[currentside-1][currentindex] == 1: #land in empty spot (now has 1) on your own side - take stones from opposite spot
+                oppositeside, oppositeindex = self.otherplayer(player), 7 - currentindex
+                newstate.board[player-1][0] += newstate.board[oppositeside-1][oppositeindex]
+                newstate.board[oppositeside-1][oppositeindex] = 0
+            #now we have nextplayer - by default other player, or current player if they landed on their store
+            #but if one player has no legal move, their turn is skipped - go to the other one.
+            #if neither has a move, game is over and we don't care whose turn it is
+            newstate.current_player_num = nextplayer
+            if len(self.allowed_moves(newstate, nextplayer))==0:
+                newstate.current_player_num = self.otherplayer(nextplayer)
+            return newstate
+        return state #only for invalid move, ask again
+        
+    #game is over when no more moves allowed. player with most stones wins, or tie if equal
+    def outcome(self, state):
+        if len(self.allowed_moves(state, 1)) > 0 or len(self.allowed_moves(state, 2)) > 0:
+            return None
+        #minmax player wants to maximize own outcome - so usually give +1 for win, 0 for tie, -1 for loss
+        #but we can try giving them score for how many they get also - should give similar behavior since player's scores sum to constant
+        #only difference should be that they try to win by as much as possible or lose by as little as possible (does this make calculations harder?)
+        player1score = state.board[0][0]
+        player2score = state.board[1][0]
+        return {1: player1score, 2: player2score}
+        #regular way - +1 to one with more, -1 to one with less, or 0 both if tied
+
+    def display(self, state):
+        #+---+---+---+---+---+---+---+---+
+        #|   | 1 | 2 | 3 | 4 | 5 | 6 |   |
+        #| 0 |---+---+---+---+---+---| 0 |
+        #|   | 6 | 5 | 4 | 3 | 2 | 1 |   |
+        #+---+---+---+---+---+---+---+---+
+        toplegend ='moves:1   2   3   4   5   6      \n'
+        side =     '+---+---+---+---+---+---+---+---+\n'
+##        top =    '|   | 1 | 2 | 3 | 4 | 5 | 6 |   |\n'
+##        middle = '| 0 |---+---+---+---+---+---| 0 |\n'
+##        bottom = '|   | 6 | 5 | 4 | 3 | 2 | 1 |   |\n'
+        botlegend ='moves:6   5   4   3   2   1      \n'
+
+        top = '|'.join(['|   ']+[self.centeredstring(state.board[1][i],3) for i in range(1,7)]+['   |'])+'\n'
+        middle = '|'+self.centeredstring(state.board[1][0],3)+'|---+---+---+---+---+---|'+self.centeredstring(state.board[0][0],3)+'|\n'
+        bottom = '|'.join(['|   ']+[self.centeredstring(state.board[0][i],3) for i in range(6,0,-1)]+['   |'])+'\n'
+
+        playerstr = "\nplayer "+str(state.current_player_num)+"'s turn:\n"
+        if state.current_player_num == 2:
+            print(playerstr+toplegend+side+top+middle+bottom+side)
+        else:
+            print(playerstr+side+top+middle+bottom+side+botlegend)
+    
+    #mancala specific methods
+    def centeredstring(self, num, totalwidth):
+        s = str(num)
+        beforenum = math.floor((totalwidth - len(s))/2)
+        afternum = math.ceil((totalwidth - len(s))/2)
+        beforestr = ''.join([' ' for x in range(beforenum)])
+        afterstr = ''.join([' ' for x in range(afternum)])
+        return beforestr+s+afterstr
+
+    #what space do you go into after current space? depends on which player.
+    #represent current space as which player's side (1,2) and position (0 to 6), return in same format
+    #mancala - current player goes into their own store but not opponent's store
+    def nextspace(self, whoseside, index, whoseturn):
+        if index > 1:
+            return (whoseside, index-1) #advance 1 spot along the row
+        elif index == 1: #last in row - go to store if it is your own, otherwise go to other row
+            if whoseside == whoseturn:
+                return (whoseside, 0)
+            else:
+                return (self.otherplayer(whoseside), 6)
+        else: #index is 0 - always go to other row
+            return (self.otherplayer(whoseside), 6) #after store is other players side
+
+    #number of the other player, for 2 player game assuming players 1 and 2
+    #TODO generalize this to rotating list of players, put it in game class
+    def otherplayer(self, playernum):
+        return 1 if playernum ==2 else 2
+    
+class mancalaHumanPlayer(HumanPlayer):
+    def pick_move(self, game, state):
+        game.display(state)
+        allowed = ['1','2','3','4','5','6'] #these are all possible moves. should we check which are actually available here?
+        move = None
+        while move not in allowed:
+            try:
+                print ("player "+str(self.mynumber)+": enter your move as the index from 1 to 6")
+                move = input()
+            except:
+                continue
+        return int(move)
+
+class MinMaxMancalaPlayer(MinMaxSearchPlayer):
+    def represent_state(self, game, state):
+        return (state.current_player_num, tuple(state.board[0]), tuple(state.board[1])) #tuple can be a key, but not list
+    def heuristic(self, game, state):
+        return 0
+
+class smarterMinMaxMancalaPlayer(MinMaxMancalaPlayer):
+    def heuristic(self, game, state):
+        return state.board[self.mynumber-1][0] - state.board[game.otherplayer(self.mynumber)-1][0] #difference of store amounts
     
 #Tictactoe setup
 ##emptyboard = [[0,0,0],[0,0,0],[0,0,0]]
@@ -303,10 +447,20 @@ class MinMaxFingerGamePlayer(MinMaxSearchPlayer):
 ##scores = game.play()
 
 #finger game setup
-startinghands = {1:[1,1],2:[1,1]}
-player1 = fingergameHumanPlayer({'number':1})
-player2 = MinMaxFingerGamePlayer({'number':2, 'max depth':3, 'show moves':True})
-players = {1:player1, 2:player2}
-startingstate = fingergameState(startinghands,1)
-game=FingerGame({'starting state':startingstate, 'players': players})
+##startinghands = {1:[1,1],2:[1,1]}
+##player1 = fingergameHumanPlayer({'number':1})
+##player2 = MinMaxFingerGamePlayer({'number':2, 'max depth':3, 'show moves':True})
+##players = {1:player1, 2:player2}
+##startingstate = fingergameState(startinghands,1)
+##game=FingerGame({'starting state':startingstate, 'players': players})
 
+#mancala setup
+startingboard = [[0,4,4,4,4,4,4],[0,4,4,4,4,4,4]]
+#player1 = mancalaHumanPlayer({'number':1})
+#player2 = mancalaHumanPlayer({'number':2})
+player1 = smarterMinMaxMancalaPlayer({'number':1, 'max depth':6, 'show moves':True})
+player2 = smarterMinMaxMancalaPlayer({'number':2, 'max depth':6, 'show moves':True})
+players = {1:player1, 2:player2}
+startingstate = mancalaState(startingboard,1)
+game=mancalaGame({'starting state':startingstate, 'players': players})
+scores=game.play()
