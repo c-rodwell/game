@@ -42,15 +42,24 @@ class Game: #rules of the game
     
     def play(self): #private. don't need players and starting state param here if set in init
         current_state = self.starting_state
+        #try:
         while self.outcome(current_state) is None:
             current_player_num = current_state.current_player_num
             current_player = self.getplayer(current_player_num)
             chosen_move = None
-            while not (chosen_move in self.allowed_moves(current_state, current_player_num)):
+            legal_moves = self.allowed_moves(current_state, current_player_num)
+            while chosen_move not in legal_moves:
                 chosen_move = current_player.pick_move(self, self.visible_info(current_state, current_player_num))
             current_state = self.move(current_state, current_player_num, chosen_move)
         self.display(current_state) #show the ending state - do I ever not want to do that?
         return self.outcome(current_state) #could call this one less time if we remembered value from the while condition
+        # except Exception:
+        #     print("error at state: ")
+        #     self.display(current_state)
+
+    #the other player's number, for 2-player only. 1->2, 2->1
+    def otherplayer(self, playernum):
+        return 1 if playernum == 2 else 2
 
 #current state of the game
 class Gamestate: 
@@ -250,41 +259,132 @@ class MinMaxTicTacToePlayer(MinMaxSearchPlayer):
 
 #finger game
 class fingergameState(Gamestate):
+
     def __init__(self, hands, current_player_num):
         self.hands=hands
         self.current_player_num = current_player_num
+
     def copy(self):
         #copied_board = [self.board[0].copy(),self.board[1].copy(),self.board[2].copy()] #to make sure nothing is linked
         copied_board = gridofvaluescopy(self.board)
         return fingergameState(copied_board, self.current_player_num)
 
+    def hand_is_empty(self, playernum, handnum):
+        return self.hands[playernum][handnum] == 0
+
+    # return the player's hand number which is empty, or None if the player has no empty hand
+    # index will start for 1 so can do "if player_empty_hand(num)" to see if None
+    def player_empty_hand(self, playernum):
+        #return 0 in self.hands[playernum].values()
+        hands = self.hands[playernum]
+        for handnum in hands:
+            if hands[handnum] == 0:
+                return handnum
+        return None
+
+    #players not elminated from the game yet: have some nonzero hands
+    def remaining_players(self):
+        remaining_nums = []
+        #the hand of all zero for whatever length - is there a simpler dictionary constructor?
+        all_zeros_hands = {}
+        hands_per_player = len(self.hands[1]) #this is a param in FingerGame - share from there?
+        for i in range(1, 1+hands_per_player):
+            all_zeros_hands[i]=0
+        for player in self.hands:
+            if self.hands[player] != all_zeros_hands:
+                remaining_nums.append(player)
+        return remaining_nums
+
+    def remaining_players_alt(self):
+        remaining_nums = []
+        #the hand of all zero for whatever length - is there a simpler dictionary constructor?
+        for player in self.hands:
+            for hand_num in self.hands[player]:
+                if self.hands[player][hand_num] != 0:
+                    remaining_nums.append(player)
+                    break #continue the outer loop on first nonzero - don't keep looking at the other hands of that player
+                #remaining_nums.append(player)
+        return remaining_nums
+
+
 class FingerGame(Game): #for now assume 2 players
+
     def __init__(self, params):
         super().__init__(params)
         self.handsperplayer = params['hands per player'] if 'hands per player' in params else 2
         self.outnumber = parmas['out number'] if 'out number' in params else 6
+        #self.numplayers = 2 #could make a param
+
     def allowed_moves(self, state, playernum): #public - if you're not allowed to see opponents allowed moves, pass an incomplete state
         #could pass this info to player or just to check legal moves
         #(does it need player arg, since state should include which player to move?)
-        valid_adds = [(otherplayer, myhand, opponentshand)
-                for otherplayer in players for myhand in range (1,self.handsperplayer+1) for opponentshand in range(1, self.handsperplayer+1)
-                if otherplayer != playernum ]#and myhand is not zero and opponents 
-        valid_splits = ['split '+str(handnum) for handnum in range(1, self.handsperplayer+1) ] #if that hand is even and there is an open space
-    def move(self, state, player, move): #public
-        return
-        #hit - add the number from your hand to opponents hand
-        #split - put half your hand into your open hand
-        #now it is the next player's turn
+        hand_nums = range(1, self.handsperplayer+1)
+        #add own nonzero hand to opponent's nonzero hand
+        valid_adds = [("hit", otherplayer, myhand, opponentshand)
+                for otherplayer in self.players for myhand in hand_nums for opponentshand in hand_nums
+                if otherplayer != playernum #no hitting own hand
+                and not state.hand_is_empty(otherplayer, opponentshand) #no hitting opponents empty hand
+                and not state.hand_is_empty(playernum, myhand)] #no hitting with own empty hand
+        #split own nonzero, even hand in half. needs another open space
+        valid_splits = [('split', handnum) for handnum in range(1, self.handsperplayer+1)
+                        if not state.hand_is_empty(playernum, handnum)
+                        and state.hands[playernum][handnum] %2 == 0
+                        and state.player_empty_hand(playernum)]
+        return valid_adds + valid_splits
 
+    # hit - add the number from your hand to opponents hand. if over limit, it goes to 0.
+    # split - put half your even, nonempty hand into your other empty hand
+    # then it is the next player's turn - no repeat moves
+    def move(self, state, player, move): #public
+        next_state = state.copy()
+        if move[0] == "hit":
+            hit, otherplayer, myhand, opponentshand = move
+            new_value = next_state.hands[otherplayer][opponentshand] + next_state.hands[player][myhand]
+            if new_value >= self.outnumber:
+                new_value = 0
+            next_state.hands[otherplayer][opponentshand] = new_value
+        elif move[0] == "split":
+            split, handnum = move
+            open_hand = next_state.player_empty_hand(player)
+            half_val = next_state.hands[player][handnum] / 2
+            next_state.hands[player][handnum] = half_val
+            next_state.hands[player][open_hand] = half_val
+        return next_state
+
+    #if all but one player has all 0: that player gets +1, others get -1
+    #make a tie for looped games? -> tie by repetition count or something -> need to use the whole history?
+    #else None - not finished yet
     def outcome(self, state):
-        return
-        #if all but one player has all 0: that player gets +1, others get -1
-        #make a tie for looped games?
-        #else None
+        remaining = state.remaining_players()
+        if len(remaining) > 1:
+            return None
+        elif len(remaining) == 1:
+            scores = {}
+            for playernum in self.playernumbers:
+                if playernum in remaining:
+                    scores[playernum] = +1
+                else:
+                    scores[playernum] = -1
+            return scores
+        else:
+            #should not get 0 or negative
+            raise Exception("error - 0 or negative players remaining")
 
     def display(self, state):
-        #show the gamestate
-        return
+        #show the gamestate:
+        #     hand 1   hand 2     ...hand k
+        #p1   1         1           1
+        #p2   1         2           3
+        #...
+        #pn   0         4           2
+
+        #but usually just 2 players?
+
+        #print the top line
+
+        # or crude version: just list the hands.
+        print(state)
+
     
 class fingergameHumanPlayer(HumanPlayer):
     def pick_move(self, game, state):
@@ -438,29 +538,41 @@ class smarterMinMaxMancalaPlayer(MinMaxMancalaPlayer):
         return state.board[self.mynumber-1][0] - state.board[game.otherplayer(self.mynumber)-1][0] #difference of store amounts
     
 #Tictactoe setup
-##emptyboard = [[0,0,0],[0,0,0],[0,0,0]]
-##player1 = MinMaxTicTacToePlayer({'number':1, 'max depth':2, 'show moves':True})
-##player2 = tictactoeHumanPlayer({'number':2})
-##players = {1:player1, 2:player2}
-##tictactoestart=tictactoeState(emptyboard, 1)
-##game = tictactoeGame({'starting state':tictactoestart, 'players': players})
-##scores = game.play()
+def tic_tac_toe_demo():
+    emptyboard = [[0,0,0],[0,0,0],[0,0,0]]
+    player1 = MinMaxTicTacToePlayer({'number':1, 'max depth':2, 'show moves':True})
+    player2 = tictactoeHumanPlayer({'number':2})
+    players = {1:player1, 2:player2}
+    tictactoestart=tictactoeState(emptyboard, 1)
+    game = tictactoeGame({'starting state':tictactoestart, 'players': players})
+    scores = game.play()
 
 #finger game setup
-##startinghands = {1:[1,1],2:[1,1]}
-##player1 = fingergameHumanPlayer({'number':1})
-##player2 = MinMaxFingerGamePlayer({'number':2, 'max depth':3, 'show moves':True})
-##players = {1:player1, 2:player2}
-##startingstate = fingergameState(startinghands,1)
-##game=FingerGame({'starting state':startingstate, 'players': players})
+def finger_game_demo():
+    startinghands = {1:[1,1],2:[1,1]}
+    player1 = fingergameHumanPlayer({'number':1})
+    player2 = fingergameHumanPlayer({'number': 2})
+
+    #player2 = MinMaxFingerGamePlayer({'number':2, 'max depth':3, 'show moves':True})
+    players = {1:player1, 2:player2}
+    startingstate = fingergameState(startinghands,1)
+    game=FingerGame({'starting state':startingstate, 'players': players})
+    scores=game.play()
 
 #mancala setup
-startingboard = [[0,4,4,4,4,4,4],[0,4,4,4,4,4,4]]
-#player1 = mancalaHumanPlayer({'number':1})
-#player2 = mancalaHumanPlayer({'number':2})
-player1 = smarterMinMaxMancalaPlayer({'number':1, 'max depth':6, 'show moves':True})
-player2 = smarterMinMaxMancalaPlayer({'number':2, 'max depth':6, 'show moves':True})
-players = {1:player1, 2:player2}
-startingstate = mancalaState(startingboard,1)
-game=mancalaGame({'starting state':startingstate, 'players': players})
-scores=game.play()
+def mancala_demo():
+    startingboard = [[0,4,4,4,4,4,4],[0,4,4,4,4,4,4]]
+    #player1 = mancalaHumanPlayer({'number':1})
+    player2 = mancalaHumanPlayer({'number':2})
+    player1 = smarterMinMaxMancalaPlayer({'number':1, 'max depth':3, 'show moves':True})
+    #player2 = MinMaxMancalaPlayer({'number': 2, 'max depth': 6, 'show moves': True})
+    #player2 = smarterMinMaxMancalaPlayer({'number':2, 'max depth':8, 'show moves':True})
+    players = {1:player1, 2:player2}
+    startingstate = mancalaState(startingboard,1)
+    game=mancalaGame({'starting state':startingstate, 'players': players})
+    scores=game.play()
+    print(scores)
+
+if __name__ == "__main__":
+    #mancala_demo()
+    finger_game_demo()
